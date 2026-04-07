@@ -1,28 +1,34 @@
 import streamlit as st
 import pandas as pd
 import random
+from streamlit_autorefresh import st_autorefresh
 
 # --- KONFIGURACJA STAŁYCH ---
 ADMIN_USER = "Dawid"
 ADMIN_PASSWORD = "Printiverse69"
 
 
-# --- GLOBALNA PAMIĘĆ (WSPÓLNA DLA WSZYSTKICH URZĄDZEŃ) ---
+# --- GLOBALNA PAMIĘĆ (WSPÓLNA DLA WSZYSTKICH) ---
 @st.cache_resource
 def get_global_state():
     return {
-        'players': [],  # Lista słowników {'login': ..., 'pwd': ...}
+        'players': [],
         'passwords_df': pd.DataFrame(columns=['Hasło', 'Podpowiedź']),
         'logs': {'głosowanie': [], 'historia_haseł': [], 'historia_impostorów': []},
         'settings': {"impostors": 1, "hints": True},
         'game_active': False,
-        'current_game_data': {}
+        'current_game_data': {},
+        'game_id': 0  # Licznik rund do wymuszania odświeżania
     }
 
 
 gs = get_global_state()
 
-# --- INICJALIZACJA SESJI LOKALNEJ (TYLKO DLA NAWIGACJI) ---
+# --- SYNCHRONIZACJA (Odświeżanie co 2 sekundy) ---
+# To sprawia, że telefon gracza sam "zauważy" start gry
+st_autorefresh(interval=2000, key="datarefresh")
+
+# --- INICJALIZACJA SESJI LOKALNEJ ---
 if 'view' not in st.session_state: st.session_state.view = "player_login"
 if 'logged_user' not in st.session_state: st.session_state.logged_user = None
 if 'admin_sub_menu' not in st.session_state: st.session_state.admin_sub_menu = "Główny"
@@ -36,32 +42,31 @@ def start_game():
     ]
 
     if len(available_passwords) == 0:
-        return "Błąd: Brak nowych haseł w bazie!"
+        return "Błąd: Brak nowych haseł!"
 
     selected_row = available_passwords.sample(n=1).iloc[0]
-    haslo = selected_row['Hasło']
-    podpowiedz = selected_row['Podpowiedź']
 
     all_participants = [p['login'] for p in gs['players']]
-    # Jeśli admin jest zalogowany jako gracz na jakimś urządzeniu, dodajemy go do puli
     if ADMIN_USER not in all_participants:
         all_participants.append(ADMIN_USER)
 
     if len(all_participants) < 3:
-        return "Błąd: Potrzeba min. 3 graczy!"
+        return "Błąd: Min. 3 graczy!"
 
     num_imp = min(gs['settings']['impostors'], len(all_participants) - 1)
     impostors = random.sample(all_participants, num_imp)
 
+    # Zapisanie wszystkiego do globalnego stanu
     gs['current_game_data'] = {
-        "haslo": haslo,
-        "podpowiedz": podpowiedz,
+        "haslo": selected_row['Hasło'],
+        "podpowiedz": selected_row['Podpowiedź'],
         "impostors": impostors
     }
 
-    gs['logs']['historia_haseł'].append(haslo)
+    gs['logs']['historia_haseł'].append(selected_row['Hasło'])
     gs['logs']['historia_impostorów'].append(", ".join(impostors))
     gs['game_active'] = True
+    gs['game_id'] += 1  # Zmiana ID rundy
     return None
 
 
@@ -91,55 +96,38 @@ elif st.session_state.view == "admin_panel":
     st.divider()
 
     if st.session_state.admin_sub_menu == "Dodaj":
-        st.subheader("Gracze")
         if st.button("KASUJ WSZYSTKICH"): gs['players'] = []; st.rerun()
-
-        count = len(gs['players'])
-        st.write(f"Zarejestrowani: {count}/12")
+        st.write(f"Zarejestrowani: {len(gs['players'])}/12")
         for i, p in enumerate(gs['players']):
             st.text(f"{i + 1}. {p['login']}")
 
-        if count < 12:
-            st.write(f"--- Dodaj: Gracz {count + 1} ---")
-            n_l = st.text_input("Login")
-            n_p = st.text_input("Hasło", type="password")
-            ca, cb = st.columns(2)
-            if ca.button("Dodaj kolejnego"):
-                if n_l and n_p: gs['players'].append({'login': n_l, 'pwd': n_p}); st.rerun()
-            if cb.button("Zakończ"):
-                if count + 1 < 3:
-                    st.error("Min. 3 graczy!")
-                elif n_l and n_p:
-                    gs['players'].append({'login': n_l, 'pwd': n_p})
-                    st.session_state.admin_sub_menu = "Główny";
-                    st.rerun()
+        n_l = st.text_input("Login nowego gracza")
+        n_p = st.text_input("Hasło", type="password")
+        if st.button("Dodaj gracza"):
+            if n_l and n_p:
+                gs['players'].append({'login': n_l, 'pwd': n_p})
+                st.rerun()
 
     elif st.session_state.admin_sub_menu == "Baza":
-        st.subheader("Baza haseł")
+        st.subheader("Baza haseł (Kolumna 1: Hasło, Kolumna 2: Podpowiedź)")
         gs['passwords_df'] = st.data_editor(gs['passwords_df'], num_rows="dynamic", use_container_width=True)
-        if st.button("Wróć"): st.session_state.admin_sub_menu = "Główny"; st.rerun()
 
     elif st.session_state.admin_sub_menu == "Rozgrywka":
-        st.subheader("Ustawienia")
         gs['settings']['impostors'] = st.number_input("Liczba impostorów", 1, 5, gs['settings']['impostors'])
-        gs['settings']['hints'] = st.checkbox("Podpowiedzi", gs['settings']['hints'])
-        if st.button("Wróć"): st.session_state.admin_sub_menu = "Główny"; st.rerun()
+        gs['settings']['hints'] = st.checkbox("Podpowiedzi dla Impostora", gs['settings']['hints'])
 
     elif st.session_state.admin_sub_menu == "Logi":
-        st.subheader("Logi")
         k = st.selectbox("Kategoria", ["głosowanie", "historia_haseł", "historia_impostorów"])
         st.write(gs['logs'][k])
-        if st.button("Wyczyść wszystko"):
-            gs['logs'] = {key: [] for key in gs['logs']}
-            st.rerun()
+        if st.button("Wyczyść wszystko"): gs['logs'] = {key: [] for key in gs['logs']}; st.rerun()
 
     if st.button("Wyloguj"): st.session_state.view = "player_login"; st.rerun()
 
-# --- UI: PANEL GRACZY ---
+# --- UI: PANEL LOGOWANIA ---
 elif st.session_state.view == "player_login":
-    st.title("🎭 Logowanie Gracza")
-    l_u = st.text_input("Login", key="login_field")
-    l_p = st.text_input("Hasło", type="password", key="pass_field")
+    st.title("🎭 Impostor - Logowanie")
+    l_u = st.text_input("Twój Login")
+    l_p = st.text_input("Twoje Hasło", type="password")
 
     if st.button("Zaloguj się", use_container_width=True):
         if l_u == ADMIN_USER and l_p == ADMIN_PASSWORD:
@@ -153,19 +141,19 @@ elif st.session_state.view == "player_login":
                 st.session_state.view = "game_room"
                 st.rerun()
             else:
-                st.error("Nie znaleziono gracza!")
+                st.error("Nie znaleziono takiego gracza!")
 
     if st.button("⚙️ Admin"): st.session_state.view = "admin_auth"; st.rerun()
 
 # --- UI: POKÓJ GRY ---
 elif st.session_state.view == "game_room":
-    st.title("🕹️ Gra")
+    st.title("🕹️ Arena Gry")
     nick = ADMIN_USER if st.session_state.logged_user == "admin_as_player" else st.session_state.logged_user
 
     if not gs['game_active']:
-        st.warning("Oczekiwanie na start...")
+        st.warning("⏳ Oczekiwanie na rozpoczęcie rundy przez admina...")
         if st.session_state.logged_user == "admin_as_player":
-            if st.button("🚀 WYSTARTUJ", type="primary"):
+            if st.button("🚀 ROZPOCZNIJ ROZGRYWKĘ", type="primary"):
                 err = start_game()
                 if err:
                     st.error(err)
@@ -173,20 +161,24 @@ elif st.session_state.view == "game_room":
                     st.rerun()
             if st.button("⚙️ PANEL ADMINA"): st.session_state.view = "admin_panel"; st.rerun()
     else:
-        # Gra trwa
-        imp_list = gs['current_game_data'].get('impostors', [])
-        if nick in imp_list:
-            st.error("🕵️ JESTEŚ IMPOSTOREM!")
-            if gs['settings']['hints']: st.info(f"Podpowiedź: {gs['current_game_data']['podpowiedz']}")
-        else:
-            st.success(f"Twoje hasło: {gs['current_game_data']['haslo']}")
+        # POKAZYWANIE RÓL
+        st.divider()
+        impostors = gs['current_game_data'].get('impostors', [])
 
+        if nick in impostors:
+            st.error("🕵️ JESTEŚ IMPOSTOREM!")
+            if gs['settings']['hints']:
+                st.info(f"Twoja podpowiedź: **{gs['current_game_data']['podpowiedz']}**")
+        else:
+            st.success(f"Twoje hasło to: **{gs['current_game_data']['haslo']}**")
+
+        st.divider()
         if st.session_state.logged_user == "admin_as_player":
             if st.button("🛑 ZAKOŃCZ RUNDĘ"):
                 gs['game_active'] = False
                 st.rerun()
 
-    if st.button("Wyloguj"):
+    if st.button("Wyjdź do menu"):
         st.session_state.logged_user = None
         st.session_state.view = "player_login"
         st.rerun()

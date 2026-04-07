@@ -21,7 +21,7 @@ def get_global_state():
         'game_state': 'WAITING',
         'current_game_data': {},
         'scores': {},
-        'last_round_points': {},  # Przechowuje punkty zdobyte TYLKO w ostatniej turze
+        'last_round_points': {},
 
         'votes_again': {},
         'show_results_until': 0,
@@ -53,11 +53,12 @@ def draw_footer():
             left: 0;
             bottom: 0;
             width: 100%;
-            background-color: transparent;
+            background-color: rgba(255,255,255,0.05);
             color: gray;
             text-align: center;
             font-size: 0.8rem;
-            padding: 10px;
+            padding: 5px;
+            z-index: 100;
         }
         </style>
         <div class="footer">
@@ -102,7 +103,6 @@ def calculate_points():
 def start_game():
     init_scores()
     used_passwords = gs['logs']['historia_haseł']
-    # Filtrowanie haseł (LP nie wpływa na logikę, tylko na widok)
     available_passwords = gs['passwords_df'][~gs['passwords_df']['Hasło'].isin(used_passwords)]
 
     if len(available_passwords) == 0: return "Błąd: Brak nowych haseł w bazie!"
@@ -136,14 +136,14 @@ def start_game():
     return None
 
 
-# --- NAWIGACJA I UI ---
+# --- EKRANY ---
 
 if st.session_state.view == "admin_auth":
-    st.title("🔐 Autoryzacja")
+    st.title("🔐 Autoryzacja Admina")
     if st.button("Powrót"): st.session_state.view = "player_login"; st.rerun()
     u_a = st.text_input("Login")
     p_a = st.text_input("Hasło", type="password")
-    if st.button("Wejdź"):
+    if st.button("Zaloguj"):
         if u_a == ADMIN_USER and p_a == ADMIN_PASSWORD:
             st.session_state.logged_user = "admin_only";
             st.session_state.view = "admin_panel";
@@ -179,14 +179,14 @@ elif st.session_state.view == "admin_panel":
             n_l = st.text_input("Nazwa", key=f"n_{gs['reg_counter']}")
             n_p = st.text_input("Hasło", type="password", key=f"p_{gs['reg_counter']}")
             ca, cb = st.columns(2)
-            if ca.button("Dodaj i kolejny"):
+            if ca.button("Dodaj kolejnego"):
                 if n_l.strip():
                     gs['players'].append({'login': n_l.strip(), 'pwd': n_p})
                     gs['reg_counter'] += 1;
                     st.rerun()
                 else:
-                    st.error("Brak nazwy!")
-            if cb.button("Dodaj i zakończ"):
+                    st.error("Nazwa nie może być pusta!")
+            if cb.button("Zakończ dodawanie"):
                 if n_l.strip(): gs['players'].append({'login': n_l.strip(), 'pwd': n_p})
                 if len(gs['players']) >= 3:
                     gs['reg_counter'] += 1
@@ -197,15 +197,15 @@ elif st.session_state.view == "admin_panel":
 
     elif st.session_state.admin_sub_menu == "Baza":
         st.subheader("Baza haseł")
-        # Wyświetlanie haseł wygwiazdkowanych w edytorze (column_config)
         edited = st.data_editor(
             st.session_state.temp_df,
             num_rows="dynamic",
             use_container_width=True,
-            hide_index=True,  # Usuwa domyślną kolumnę z indeksem/zaznaczaniem
+            hide_index=True,
             column_config={
-                "Hasło": st.column_config.TextColumn("Hasło", help="Wpisz hasło", required=True),
-                "LP": st.column_config.TextColumn("LP", width="small")
+                "LP": st.column_config.TextColumn("LP", width="small"),
+                "Hasło": st.column_config.TextColumn("Hasło", required=True),
+                "Podpowiedź": st.column_config.TextColumn("Podpowiedź")
             }
         )
         st.session_state.temp_df = edited
@@ -225,13 +225,13 @@ elif st.session_state.view == "admin_panel":
             cc1, cc2 = st.columns([4, 1])
             cc1.write(f"{idx + 1}. {val}")
             if cc2.button("Usuń", key=f"del_{kat}_{idx}"): gs['logs'][kat].pop(idx); st.rerun()
-        if st.button("Czyść wszystko"): gs['logs'] = {k: [] for k in gs['logs']}; st.rerun()
+        if st.button("Czyść kategorię"): gs['logs'][kat] = []; st.rerun()
 
 elif st.session_state.view == "player_login":
-    st.title("🎭 Impostor App")
+    st.title("🎭 Impostor")
     l_u = st.text_input("Login")
     l_p = st.text_input("Hasło", type="password")
-    if st.button("Graj", use_container_width=True):
+    if st.button("Zaloguj", use_container_width=True):
         if l_u == ADMIN_USER and l_p == ADMIN_PASSWORD:
             st.session_state.logged_user = "admin_as_player";
             st.session_state.view = "game_room";
@@ -241,8 +241,8 @@ elif st.session_state.view == "player_login":
             if match:
                 st.session_state.logged_user = l_u; st.session_state.view = "game_room"; st.rerun()
             else:
-                st.error("Błąd!")
-    if st.button("Panel Admina"): st.session_state.view = "admin_auth"; st.rerun()
+                st.error("Błędne dane!")
+    if st.button("⚙️ Admin"): st.session_state.view = "admin_auth"; st.rerun()
 
 elif st.session_state.view == "game_room":
     nick = ADMIN_USER if st.session_state.logged_user == "admin_as_player" else st.session_state.logged_user
@@ -250,12 +250,12 @@ elif st.session_state.view == "game_room":
 
     if is_admin:
         ca1, ca2 = st.columns(2)
-        if ca1.button("⚙️ Panel"): st.session_state.view = "admin_panel"; st.rerun()
+        if ca1.button("⚙️ Panel Admina"): st.session_state.view = "admin_panel"; st.rerun()
         if ca2.button("🔄 Zakończ"): gs['game_state'] = 'WAITING'; st.rerun()
 
     if gs['game_state'] == 'WAITING':
         st.info("Oczekiwanie na start...")
-        if is_admin and st.button("🚀 START", type="primary"):
+        if is_admin and st.button("🚀 START", type="primary", use_container_width=True):
             err = start_game()
             if err:
                 st.error(err)
@@ -268,14 +268,18 @@ elif st.session_state.view == "game_room":
             if gs['settings']['hints']: st.info(f"Podpowiedź: {gs['current_game_data']['podpowiedz']}")
         else:
             st.success(f"Hasło: {gs['current_game_data']['haslo']}")
-        if is_admin and st.button("🛑 Głosowanie"): gs['game_state'] = 'VOTING_AGAIN'; st.rerun()
+        if is_admin and st.button("🛑 Przejdź do głosowania", use_container_width=True):
+            gs['game_state'] = 'VOTING_AGAIN';
+            st.rerun()
 
     elif gs['game_state'] == 'VOTING_AGAIN':
-        st.subheader("Głosowanie: To samo hasło?")
+        st.subheader("Czy gramy kolejną turę z tym samym hasłem?")
         if nick not in gs['votes_again']:
             v1, v2 = st.columns(2)
-            if v1.button("TAK"): gs['votes_again'][nick] = "TAK"; st.rerun()
-            if v2.button("NIE"): gs['votes_again'][nick] = "NIE"; st.rerun()
+            if v1.button("✅ TAK"): gs['votes_again'][nick] = "TAK"; st.rerun()
+            if v2.button("❌ NIE"): gs['votes_again'][nick] = "NIE"; st.rerun()
+        else:
+            st.write("Czekamy na resztę...")
         if len(gs['votes_again']) == len(gs['current_game_data']['participants']):
             gs['show_results_until'] = time.time() + 5
             gs['game_state'] = 'SHOWING_AGAIN_RESULTS';
@@ -284,30 +288,31 @@ elif st.session_state.view == "game_room":
     elif gs['game_state'] == 'SHOWING_AGAIN_RESULTS':
         t_c = list(gs['votes_again'].values()).count("TAK")
         n_c = list(gs['votes_again'].values()).count("NIE")
-        st.write(f"TAK: {t_c} | NIE: {n_c}")
+        st.subheader(f"Wynik: TAK ({t_c}) | NIE ({n_c})")
         if time.time() > gs['show_results_until']:
-            gs['game_state'] = 'PLAYING' if t_c > n_c else 'VOTING_IMPOSTOR';
+            # KLUCZOWA POPRAWKA: czyścimy słownik głosów przed zmianą stanu
+            gs['votes_again'] = {}
+            gs['game_state'] = 'PLAYING' if t_c > n_c else 'VOTING_IMPOSTOR'
             st.rerun()
 
     elif gs['game_state'] == 'VOTING_IMPOSTOR':
-        st.subheader("Wskaż Impostora!")
+        st.subheader("Głosowanie na Impostora!")
         if nick not in gs['votes_impostor']:
             others = [p for p in gs['current_game_data']['participants'] if p != nick]
-            vote = st.selectbox("Głos na:", ["---"] + others)
+            vote = st.selectbox("Wybierz:", ["---"] + others)
             if st.button("Głosuj"):
                 if vote != "---": gs['votes_impostor'][nick] = vote; st.rerun()
         if len(gs['votes_impostor']) == len(gs['current_game_data']['participants']):
-            calculate_points();
+            calculate_points()
             gs['game_state'] = 'SHOWING_IMPOSTOR_RESULTS';
             st.rerun()
 
     elif gs['game_state'] == 'SHOWING_IMPOSTOR_RESULTS':
-        st.subheader("Wyniki tury:")
+        st.subheader("Wyniki głosowania i punkty:")
         participants = gs['current_game_data']['participants']
         v_counts = {p: 0 for p in participants}
         for v in gs['votes_impostor'].values(): v_counts[v] += 1
 
-        # Tabela wyników tury z punktami
         res_data = []
         for p in participants:
             role = "🕵️ IMPOSTOR" if p in gs['current_game_data']['impostors'] else "👤 Gracz"
@@ -315,12 +320,13 @@ elif st.session_state.view == "game_room":
             res_data.append({"Gracz": p, "Rola": role, "Głosy": v_counts[p], "Punkty +": pts})
 
         st.table(pd.DataFrame(res_data))
-        if is_admin and st.button("🚀 Nowa tura"): gs['game_state'] = 'WAITING'; st.rerun()
+        if is_admin and st.button("🚀 Następna tura (Nowe hasło)", use_container_width=True):
+            gs['game_state'] = 'WAITING';
+            st.rerun()
 
     st.divider()
-    with st.expander("🏆 Ranking"):
+    with st.expander("🏆 Ranking ogólny"):
         for p, s in sorted(gs['scores'].items(), key=lambda x: x[1], reverse=True): st.write(f"**{p}**: {s} pkt")
     if st.button("Wyloguj"): st.session_state.logged_user = None; st.session_state.view = "player_login"; st.rerun()
 
-# Rysowanie stopki na samym dole
 draw_footer()

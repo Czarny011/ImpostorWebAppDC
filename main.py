@@ -9,7 +9,7 @@ from streamlit_gsheets import GSheetsConnection
 ADMIN_USER = "Dawid"
 ADMIN_PASSWORD = "Printiverse69"
 
-st.set_page_config(page_title="Impostor Cloud v4.3", page_icon="🎭", layout="centered")
+st.set_page_config(page_title="Impostor Cloud v4.4", page_icon="🎭", layout="centered")
 
 # --- STYLE CSS ---
 st.markdown(f"""
@@ -70,10 +70,11 @@ def init_game_state():
 
 gs = init_game_state()
 
-# SYNCHRONIZACJA GRACZY
-p_df = get_players_from_sheet()
-if not p_df.empty:
-    gs['cached_players'] = p_df.to_dict('records')
+# SYNCHRONIZACJA GRACZY (Ładowanie początkowe)
+if not gs['cached_players']:
+    p_df = get_players_from_sheet()
+    if not p_df.empty:
+        gs['cached_players'] = p_df.to_dict('records')
     if not any(p['login'] == ADMIN_USER for p in gs['cached_players']):
         gs['cached_players'].append({'login': ADMIN_USER, 'pwd': ADMIN_PASSWORD, 'score': 0})
 
@@ -158,6 +159,8 @@ elif st.session_state.view == "admin_panel":
 
     with t2:
         if st.button("🔄 ODŚWIEŻ LISTĘ Z GOOGLE"):
+            p_df = conn.read(worksheet="gracze", ttl=0)
+            if not p_df.empty: gs['cached_players'] = p_df.to_dict('records')
             st.cache_data.clear();
             st.rerun()
         if st.button("🔥 ZERUJ PUNKTY"):
@@ -249,15 +252,15 @@ elif st.session_state.view == "game_room":
             results_summary = []
 
             # 1. Zlicz głosy na poszczególnych graczy
-            vote_counts = pd.Series(gs['votes_impostor'].values()).value_counts()
+            voted_names = list(gs['votes_impostor'].values())
 
-            # 2. Przelicz punkty dla każdego uczestnika
+            # 2. Przelicz punkty dla każdego uczestnika i zaktualizuj od razu w gs['cached_players']
             for p in gs['cached_players']:
                 if p['login'] in gs['participants']:
                     added_pts = 0
                     if p['login'] in gs['impostors']:
                         # Punktacja Impostora: (Gracze - 1) - głosy na niego
-                        votes_on_him = vote_counts.get(p['login'], 0)
+                        votes_on_him = voted_names.count(p['login'])
                         added_pts = (len(gs['participants']) - 1) - votes_on_him
                     else:
                         # Punktacja Gracza: 2 pkt za trafienie w dowolnego impostora
@@ -265,10 +268,11 @@ elif st.session_state.view == "game_room":
                         if voted_for in gs['impostors']:
                             added_pts = 2
 
+                    # AKTUALIZACJA W PAMIĘCI (to naprawia ranking)
                     p['score'] = int(float(p.get('score', 0))) + added_pts
                     results_summary.append(f"{p['login']}: +{added_pts}")
 
-            # 3. Zapisz Logi (Data, Hasło, Impostorzy, Wyniki)
+            # 3. Przygotuj log i zapisz do arkuszy
             log_entry = {
                 "Data": datetime.now().strftime("%H:%M"),
                 "Hasło": gs['current_word'],
@@ -276,6 +280,7 @@ elif st.session_state.view == "game_room":
                 "Wynik": " | ".join(results_summary)
             }
 
+            # Zapisz wszystko do Google Sheets
             try:
                 current_logs = conn.read(worksheet="logi", ttl=0)
                 updated_logs = pd.concat([current_logs, pd.DataFrame([log_entry])], ignore_index=True)
@@ -284,8 +289,10 @@ elif st.session_state.view == "game_room":
                 save_data("logi", pd.DataFrame([log_entry]))
 
             save_data("gracze", pd.DataFrame(gs['cached_players']))
-            gs['game_state'] = 'WAITING';
-            gs['votes_impostor'] = {};
+
+            # 4. Zmień stan i odśwież
+            gs['game_state'] = 'WAITING'
+            gs['votes_impostor'] = {}
             st.rerun()
 
     if user == ADMIN_USER:

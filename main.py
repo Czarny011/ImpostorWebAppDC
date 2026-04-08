@@ -9,7 +9,7 @@ from streamlit_gsheets import GSheetsConnection
 ADMIN_USER = "Dawid"
 ADMIN_PASSWORD = "Printiverse69"
 
-st.set_page_config(page_title="Impostor Cloud v4.0", page_icon="🎭", layout="centered")
+st.set_page_config(page_title="Impostor Cloud v4.1", page_icon="🎭", layout="centered")
 
 # --- STYLE CSS ---
 st.markdown(f"""
@@ -25,7 +25,6 @@ st.markdown(f"""
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 
-# Osobne funkcje ładowania z unikalnym cache, by uniknąć mieszania danych
 @st.cache_data(ttl=60)
 def get_players_from_sheet():
     try:
@@ -35,7 +34,7 @@ def get_players_from_sheet():
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=300)  # Hasła trzymamy dłużej
+@st.cache_data(ttl=300)
 def get_words_from_sheet():
     try:
         df = conn.read(worksheet="baza_hasel", ttl=0)
@@ -47,7 +46,7 @@ def get_words_from_sheet():
 def save_data(name, df):
     try:
         conn.update(worksheet=name, data=df)
-        st.cache_data.clear()  # Czyścimy wszystko przy zapisie dla pewności
+        st.cache_data.clear()
     except Exception as e:
         st.error(f"Błąd zapisu {name}: {e}")
 
@@ -71,16 +70,38 @@ def init_game_state():
 
 gs = init_game_state()
 
-# --- SYNCHRONIZACJA GRACZY ---
-# Wykonujemy to poza cache_resource, żeby lista graczy była reaktywna
+# SYNCHRONIZACJA GRACZY
 p_df = get_players_from_sheet()
 if not p_df.empty:
     gs['cached_players'] = p_df.to_dict('records')
-    # Upewnij się, że Admin jest na liście
     if not any(p['login'] == ADMIN_USER for p in gs['cached_players']):
         gs['cached_players'].append({'login': ADMIN_USER, 'pwd': ADMIN_PASSWORD, 'score': 0})
 
 st_autorefresh(interval=5000, key="global_refresh")
+
+
+# LOGIKA POMOCNICZA: START RUNDY
+def start_new_round():
+    if gs['loaded_words'].empty:
+        w_df = get_words_from_sheet()
+        if not w_df.empty: gs['loaded_words'] = w_df
+
+    if not gs['loaded_words'].empty:
+        valid = gs['loaded_words'][gs['loaded_words']["Hasło"].notna()]
+        if not valid.empty:
+            # Jeśli nikt nie jest zaznaczony, bierzemy wszystkich z bazy
+            active_list = gs['participants'] if gs['participants'] else [p['login'] for p in gs['cached_players']]
+            row = valid.sample(1).iloc[0]
+            gs.update({
+                'current_word': str(row['Hasło']),
+                'current_hint': str(row['Podpowiedź']) if 'Podpowiedź' in row else "",
+                'participants': active_list,
+                'impostors': random.sample(active_list, min(len(active_list), gs['settings']['impostors'])),
+                'game_state': 'PLAYING', 'votes_again': {}, 'votes_impostor': {}
+            })
+            return True
+    return False
+
 
 # --- LOGIKA WIDOKÓW ---
 if 'logged_user' not in st.session_state:
@@ -121,64 +142,43 @@ elif st.session_state.view == "admin_panel":
     with t1:
         gs['settings']['impostors'] = st.slider("Liczba Impostorów", 1, 3, gs['settings']['impostors'])
         gs['settings']['hints'] = st.checkbox("Podpowiedzi dla Impostorów", gs['settings']['hints'])
-
         all_nicks = [p['login'] for p in gs['cached_players']]
-        selected = st.multiselect("Gracze w rundzie", all_nicks, default=all_nicks)
+        gs['participants'] = st.multiselect("Gracze w rundzie", all_nicks, default=all_nicks)
 
         st.divider()
         if gs['loaded_words'].empty:
             if st.button("📥 WCZYTAJ HASŁA Z BAZY"):
-                w_df = get_words_from_sheet()
-                if not w_df.empty:
-                    gs['loaded_words'] = w_df
-                    st.success("Wczytano hasła!")
-                    st.rerun()
+                gs['loaded_words'] = get_words_from_sheet()
+                st.rerun()
         else:
-            st.success(f"✅ Baza gotowa ({len(gs['loaded_words'])} haseł)")
-            if st.button("🔄 PRZEŁADUJ HASŁA"):
-                gs['loaded_words'] = pd.DataFrame()
-                st.cache_data.clear()
-                st.rerun()
-
-            if gs['game_state'] == 'WAITING' and st.button("🚀 ROZPOCZNIJ RUNDĘ", type="primary"):
-                valid = gs['loaded_words'][gs['loaded_words']["Hasło"].notna()]
-                row = valid.sample(1).iloc[0]
-                gs.update({
-                    'current_word': str(row['Hasło']),
-                    'current_hint': str(row['Podpowiedź']) if 'Podpowiedź' in row else "",
-                    'participants': selected,
-                    'impostors': random.sample(selected, min(len(selected), gs['settings']['impostors'])),
-                    'game_state': 'PLAYING', 'votes_again': {}, 'votes_impostor': {}
-                })
-                st.session_state.view = "game_room";
-                st.rerun()
+            st.success(f"✅ Baza haseł gotowa")
+            if st.button("🚀 ROZPOCZNIJ RUNDĘ", type="primary"):
+                if start_new_round():
+                    st.session_state.view = "game_room"
+                    st.rerun()
 
     with t2:
-        st.subheader("Lista Graczy")
-        if st.button("🔄 WYMUŚ ODŚWIEŻENIE LISTY Z GOOGLE"):
-            st.cache_data.clear()
+        if st.button("🔄 ODŚWIEŻ LISTĘ Z GOOGLE"):
+            st.cache_data.clear();
             st.rerun()
-
         if st.button("🔥 ZERUJ PUNKTY"):
             for p in gs['cached_players']: p['score'] = 0
-            save_data("gracze", pd.DataFrame(gs['cached_players']))
+            save_data("gracze", pd.DataFrame(gs['cached_players']));
             st.rerun()
-
         for i, pl in enumerate(gs['cached_players']):
             c1, c2 = st.columns([3, 1])
-            c1.write(f"{pl['login']} - {pl.get('score', 0)} pkt")
+            c1.write(f"{pl['login']} - {int(pl.get('score', 0))} pkt")
             if pl['login'] != ADMIN_USER and c2.button("Usuń", key=f"del_{i}"):
                 gs['cached_players'].pop(i)
-                save_data("gracze", pd.DataFrame(gs['cached_players']))
+                save_data("gracze", pd.DataFrame(gs['cached_players']));
                 st.rerun()
 
     with t3:
-        st.subheader("Edytor bazy haseł")
         curr_words = get_words_from_sheet()
         new_w = st.data_editor(curr_words, num_rows="dynamic", use_container_width=True)
         if st.button("ZAPISZ HASEŁA"):
             save_data("baza_hasel", new_w)
-            gs['loaded_words'] = pd.DataFrame()
+            gs['loaded_words'] = pd.DataFrame();
             st.rerun()
 
     with t4:
@@ -191,8 +191,20 @@ elif st.session_state.view == "game_room":
 
     if gs['game_state'] == 'WAITING':
         st.subheader("🏆 RANKING")
-        st.table(pd.DataFrame(gs['cached_players'])[['login', 'score']].sort_values(by='score', ascending=False))
-        st.info("Czekaj na Admina...")
+        df_rank = pd.DataFrame(gs['cached_players'])[['login', 'score']].sort_values(by='score', ascending=False)
+        # Formatowanie punktów na liczby całkowite
+        df_rank['score'] = df_rank['score'].apply(lambda x: int(float(x)))
+        st.table(df_rank)
+
+        if user == ADMIN_USER:
+            st.divider()
+            if st.button("🚀 KOLEJNA RUNDA (SZYBKI START)", type="primary"):
+                if start_new_round():
+                    st.rerun()
+                else:
+                    st.error("Najpierw wczytaj bazę w Panelu Admina!")
+        else:
+            st.info("Czekaj na start kolejnej tury przez Admina...")
 
     elif gs['game_state'] == 'PLAYING':
         if user in gs['participants']:
@@ -210,10 +222,17 @@ elif st.session_state.view == "game_room":
             st.rerun()
 
     elif gs['game_state'] == 'VOTING_AGAIN':
-        st.subheader("Gramy dalej?")
+        st.subheader("Gramy dalej to samo?")
+        # LICZNIK GŁOSÓW DLA ADMINA
+        if user == ADMIN_USER:
+            count = len(gs['votes_again'])
+            total = len(gs['participants'])
+            st.write(f"📊 Oddano głosów: **{count} / {total}**")
+
         c1, c2 = st.columns(2)
         if c1.button("TAK"): gs['votes_again'][user] = True; st.rerun()
         if c2.button("NIE"): gs['votes_again'][user] = False; st.rerun()
+
         if user == ADMIN_USER and st.button("PODLICZ"):
             yes = sum(1 for v in gs['votes_again'].values() if v)
             gs['game_state'] = 'PLAYING' if yes > (len(gs['votes_again']) / 2) else 'VOTING_IMPOSTOR'
@@ -221,14 +240,20 @@ elif st.session_state.view == "game_room":
             st.rerun()
 
     elif gs['game_state'] == 'VOTING_IMPOSTOR':
-        st.subheader("Kto kłamie?")
+        st.subheader("Kto jest Impostorem?")
+        # LICZNIK GŁOSÓW DLA ADMINA
+        if user == ADMIN_USER:
+            count = len(gs['votes_impostor'])
+            total = len(gs['participants'])
+            st.write(f"📊 Oddano głosów: **{count} / {total}**")
+
         others = [p for p in gs['participants'] if p != user]
         choice = st.selectbox("Wskaż", others) if others else None
         if st.button("Głosuj") and choice:
             gs['votes_impostor'][user] = choice;
             st.success("Głos oddany!")
 
-        if user == ADMIN_USER and st.button("🏆 WYNIKI"):
+        if user == ADMIN_USER and st.button("🏆 PODLICZ I POKAŻ RANKING"):
             results = []
             for p in gs['cached_players']:
                 if p['login'] in gs['participants']:
@@ -237,12 +262,11 @@ elif st.session_state.view == "game_room":
                         if not any(v == p['login'] for v in gs['votes_impostor'].values()): add = 2
                     else:
                         if gs['votes_impostor'].get(p['login']) in gs['impostors']: add = 1
-                    p['score'] = int(p.get('score', 0)) + add
+                    p['score'] = int(float(p.get('score', 0))) + add
                     results.append(f"{p['login']}: +{add}")
 
             log_df = pd.DataFrame([{"Data": datetime.now().strftime("%H:%M"), "Wynik": " | ".join(results)}])
-            old_log = conn.read(worksheet="logi", ttl=0)
-            save_data("logi", pd.concat([old_log, log_df], ignore_index=True))
+            save_data("logi", pd.concat([conn.read(worksheet="logi", ttl=0), log_df], ignore_index=True))
             save_data("gracze", pd.DataFrame(gs['cached_players']))
             gs['game_state'] = 'WAITING';
             gs['votes_impostor'] = {};

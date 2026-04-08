@@ -9,7 +9,7 @@ from streamlit_gsheets import GSheetsConnection
 ADMIN_USER = "Dawid"
 ADMIN_PASSWORD = "Printiverse69"
 
-st.set_page_config(page_title="Impostor Cloud v3.2", page_icon="🎭", layout="centered")
+st.set_page_config(page_title="Impostor Cloud v3.3", page_icon="🎭", layout="centered")
 
 # --- STYLE CSS (Branding by D.CZ.) ---
 st.markdown(f"""
@@ -18,6 +18,7 @@ st.markdown(f"""
     .brand-text {{ font-size: 0.7rem; color: #666; text-align: center; display: block; margin-top: -15px; margin-bottom: 20px; }}
     .impostor-title {{ font-size: 3rem; font-weight: bold; text-align: center; color: white; margin-bottom: 0; }}
     .role-card {{ padding: 20px; border-radius: 15px; background: #262730; border: 2px solid #ff4b4b; text-align: center; }}
+    .ranking-table {{ width: 100%; border-collapse: collapse; }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -31,7 +32,7 @@ def load_sheet(name):
         if df is not None:
             return df.dropna(how='all').reset_index(drop=True)
         return pd.DataFrame()
-    except Exception as e:
+    except:
         return pd.DataFrame()
 
 
@@ -47,7 +48,11 @@ def save_sheet(name, df):
 @st.cache_resource
 def get_gs():
     p_df = load_sheet("gracze")
+    # Inicjalizacja punktów jeśli nie istnieją w arkuszu
     players = p_df.to_dict('records') if not p_df.empty else []
+    for p in players:
+        if 'score' not in p: p['score'] = 0
+
     return {
         'players': players,
         'game_state': 'WAITING',
@@ -136,9 +141,9 @@ elif st.session_state.view == "admin_panel":
                     else:
                         st.error("Baza haseł jest pusta!")
                 else:
-                    st.error("Sprawdź czy w arkuszu kolumna nazywa się dokładnie: Hasło")
+                    st.error("Sprawdź nazwę kolumny: Hasło")
         else:
-            st.info("Runda w toku. Zarządzaj nią z poziomu Areny.")
+            st.info("Runda trwa. Panel sterowania jest na Arenie.")
 
         if st.button("🏠 POWRÓT DO GRY"):
             st.session_state.view = "game_room";
@@ -146,9 +151,14 @@ elif st.session_state.view == "admin_panel":
 
     with t2:
         st.subheader("Zarządzaj graczami")
+        if st.button("🔥 WYCZYŚĆ WSZYSTKIE PUNKTY"):
+            for p in gs['players']: p['score'] = 0
+            save_sheet("gracze", pd.DataFrame(gs['players']))
+            st.rerun()
+
         for i, pl in enumerate(gs['players']):
             c1, c2 = st.columns([3, 1])
-            c1.write(f"👤 {pl['login']}")
+            c1.write(f"👤 {pl['login']} ({pl.get('score', 0)} pkt)")
             if c2.button("Usuń", key=f"del_{pl['login']}"):
                 gs['players'].pop(i)
                 save_sheet("gracze", pd.DataFrame(gs['players']))
@@ -165,7 +175,7 @@ elif st.session_state.view == "admin_panel":
                 st.rerun()
 
     with t3:
-        st.subheader("Edytuj bazę haseł")
+        st.subheader("Baza haseł")
         baza_df = load_sheet("baza_hasel")
         if baza_df.empty: baza_df = pd.DataFrame(columns=["Hasło", "Podpowiedź"])
         edited_baza = st.data_editor(baza_df, num_rows="dynamic", use_container_width=True, key="ed_baza")
@@ -174,12 +184,11 @@ elif st.session_state.view == "admin_panel":
             st.rerun()
 
     with t4:
-        st.subheader("Edytuj logi")
+        st.subheader("Logi rozgrywek")
         logi_df = load_sheet("logi")
-        if logi_df.empty: logi_df = pd.DataFrame(columns=["Data", "Impostor", "Hasło"])
-        edited_logi = st.data_editor(logi_df, num_rows="dynamic", use_container_width=True, key="ed_logi")
-        if st.button("ZAPISZ LOGI"):
-            save_sheet("logi", edited_logi);
+        st.dataframe(logi_df, use_container_width=True)
+        if st.button("WYCZYŚĆ LOGI"):
+            save_sheet("logi", pd.DataFrame(columns=["Data", "Impostorzy", "Hasło", "Głosowanie", "Punkty"]));
             st.rerun()
 
 # --- EKRAN 3: ARENA GRY ---
@@ -188,21 +197,31 @@ elif st.session_state.view == "game_room":
     user = st.session_state.logged_user
     st.write(f"Zalogowany: **{user}**")
 
+    # --- STAN: LOBBY (RANKING) ---
     if gs['game_state'] == 'WAITING':
+        st.subheader("🏆 Ranking Graczy")
+        # Admin traktowany jako gracz (jeśli Dawid jest na liście graczy, używamy jego punktów)
+        full_list = pd.DataFrame(gs['players'])
+        if not full_list.empty:
+            # Sortowanie od najlepszego
+            ranking = full_list[['login', 'score']].sort_values(by='score', ascending=False).reset_index(drop=True)
+            st.table(ranking)
+        else:
+            st.info("Brak graczy w systemie.")
         st.info("Czekamy na start rundy...")
-        temp_list = gs['players'] + [{'login': ADMIN_USER, 'score': 'N/A'}]
-        st.table(pd.DataFrame(temp_list)[['login', 'score']])
 
+    # --- STAN: GRA (HASŁA) ---
     elif gs['game_state'] == 'PLAYING':
         if user in gs['participants']:
             st.markdown("<div class='role-card'>", unsafe_allow_html=True)
             if user in gs['impostors']:
                 st.error("JESTEŚ IMPOSTOREM! 😈")
-                if gs['settings']['hints']: st.write(f"Podpowiedź: **{gs['current_hint']}**")
+                if gs['settings']['hints']:
+                    st.markdown(f"**PODPOWIEDŹ TYLKO DLA CIEBIE:**\n\n{gs['current_hint']}")
             else:
                 st.success("JESTEŚ GRACZEM 😇")
                 st.write(f"Twoje hasło: **{gs['current_word']}**")
-                st.write(f"Podpowiedź: {gs['current_hint']}")
+                st.write(f"Podpowiedź dla wszystkich: {gs['current_hint']}")
             st.markdown("</div>", unsafe_allow_html=True)
 
         if user == ADMIN_USER:
@@ -211,6 +230,7 @@ elif st.session_state.view == "game_room":
                 gs['game_state'] = 'VOTING_AGAIN'
                 st.rerun()
 
+    # --- STAN: CZY DALEJ TO SAMO ---
     elif gs['game_state'] == 'VOTING_AGAIN':
         st.subheader("Czy gramy kolejną turę z tym samym hasłem?")
         c1, c2 = st.columns(2)
@@ -219,14 +239,16 @@ elif st.session_state.view == "game_room":
 
         if user == ADMIN_USER:
             st.divider()
-            st.write(f"Głosy: {len(gs['votes_again'])}/{len(gs['participants'])}")
+            v_count = len(gs['votes_again'])
+            st.write(f"Głosy: {v_count}/{len(gs['participants'])}")
             if st.button("PODLICZ GŁOSY"):
                 yes = sum(1 for v in gs['votes_again'].values() if v)
-                no = len(gs['votes_again']) - yes
+                no = v_count - yes
                 gs['game_state'] = 'PLAYING' if yes > no else 'VOTING_IMPOSTOR'
                 gs['votes_again'] = {};
                 st.rerun()
 
+    # --- STAN: WSKAZANIE IMPOSTORA ---
     elif gs['game_state'] == 'VOTING_IMPOSTOR':
         st.subheader("Kto jest Impostorem?")
         others = [p for p in gs['participants'] if p != user]
@@ -234,19 +256,53 @@ elif st.session_state.view == "game_room":
             choice = st.selectbox("Wybierz podejrzanego", others)
             if st.button("ODDAJ GŁOS"):
                 gs['votes_impostor'][user] = choice;
-                st.success("Głos oddany!")
+                st.success(f"Zagłosowano na: {choice}")
 
         if user == ADMIN_USER:
             st.divider()
-            if st.button("ZAKOŃCZ RUNDĘ (Powrót do Lobby)"):
-                # Zapis logów przed powrotem
-                log_row = pd.DataFrame(
-                    [{"Data": datetime.now().strftime("%H:%M"), "Impostor": ", ".join(gs['impostors']),
-                      "Hasło": gs['current_word']}])
-                save_sheet("logi", pd.concat([load_sheet("logi"), log_row], ignore_index=True))
+            st.write(f"Głosowało: {len(gs['votes_impostor'])}/{len(gs['participants'])}")
+            if st.button("🏆 ZAKOŃCZ RUNDĘ I PODLICZ PUNKTY"):
+                # LOGIKA PUNKTACJI
+                votes = gs['votes_impostor']
+                impostors = gs['impostors']
+                points_summary = []
+
+                # Gracze dostają 1 pkt za każdy poprawny głos na dowolnego impostora
+                # Impostorzy dostają 2 pkt jeśli nikt na nich nie zagłosował (przetrwanie)
+                for p in gs['players']:
+                    p_name = p['login']
+                    if p_name in gs['participants']:
+                        added = 0
+                        # Jeśli gracz nie jest impostorem i trafił
+                        if p_name not in impostors:
+                            if votes.get(p_name) in impostors:
+                                p['score'] += 1
+                                added = 1
+                        # Jeśli jest impostorem i nikt go nie wskazał
+                        else:
+                            who_voted_me = [u for u, v in votes.items() if v == p_name]
+                            if not who_voted_me:
+                                p['score'] += 2
+                                added = 2
+                        points_summary.append(f"{p_name}: +{added}")
+
+                # Zapis logów
+                log_data = {
+                    "Data": datetime.now().strftime("%d/%m %H:%M"),
+                    "Impostorzy": ", ".join(impostors),
+                    "Hasło": gs['current_word'],
+                    "Głosowanie": str(votes),
+                    "Punkty": " | ".join(points_summary)
+                }
+                old_logi = load_sheet("logi")
+                save_sheet("logi", pd.concat([old_logi, pd.DataFrame([log_data])], ignore_index=True))
+                save_sheet("gracze", pd.DataFrame(gs['players']))
+
                 gs['game_state'] = 'WAITING'
+                gs['votes_impostor'] = {}
                 st.rerun()
 
+    # --- STOPKA ---
     if user == ADMIN_USER:
         st.divider()
         if st.button("⚙️ PANEL STEROWANIA"): st.session_state.view = "admin_panel"; st.rerun()

@@ -9,7 +9,7 @@ from streamlit_gsheets import GSheetsConnection
 ADMIN_USER = "Dawid"
 ADMIN_PASSWORD = "Printiverse69"
 
-st.set_page_config(page_title="Impostor Cloud v4.1", page_icon="🎭", layout="centered")
+st.set_page_config(page_title="Impostor Cloud v4.3", page_icon="🎭", layout="centered")
 
 # --- STYLE CSS ---
 st.markdown(f"""
@@ -89,7 +89,6 @@ def start_new_round():
     if not gs['loaded_words'].empty:
         valid = gs['loaded_words'][gs['loaded_words']["Hasło"].notna()]
         if not valid.empty:
-            # Jeśli nikt nie jest zaznaczony, bierzemy wszystkich z bazy
             active_list = gs['participants'] if gs['participants'] else [p['login'] for p in gs['cached_players']]
             row = valid.sample(1).iloc[0]
             gs.update({
@@ -167,7 +166,7 @@ elif st.session_state.view == "admin_panel":
             st.rerun()
         for i, pl in enumerate(gs['cached_players']):
             c1, c2 = st.columns([3, 1])
-            c1.write(f"{pl['login']} - {int(pl.get('score', 0))} pkt")
+            c1.write(f"{pl['login']} - {int(float(pl.get('score', 0)))} pkt")
             if pl['login'] != ADMIN_USER and c2.button("Usuń", key=f"del_{i}"):
                 gs['cached_players'].pop(i)
                 save_data("gracze", pd.DataFrame(gs['cached_players']));
@@ -192,7 +191,6 @@ elif st.session_state.view == "game_room":
     if gs['game_state'] == 'WAITING':
         st.subheader("🏆 RANKING")
         df_rank = pd.DataFrame(gs['cached_players'])[['login', 'score']].sort_values(by='score', ascending=False)
-        # Formatowanie punktów na liczby całkowite
         df_rank['score'] = df_rank['score'].apply(lambda x: int(float(x)))
         st.table(df_rank)
 
@@ -223,11 +221,8 @@ elif st.session_state.view == "game_room":
 
     elif gs['game_state'] == 'VOTING_AGAIN':
         st.subheader("Gramy dalej to samo?")
-        # LICZNIK GŁOSÓW DLA ADMINA
         if user == ADMIN_USER:
-            count = len(gs['votes_again'])
-            total = len(gs['participants'])
-            st.write(f"📊 Oddano głosów: **{count} / {total}**")
+            st.info(f"📊 Oddano głosów: **{len(gs['votes_again'])} / {len(gs['participants'])}**")
 
         c1, c2 = st.columns(2)
         if c1.button("TAK"): gs['votes_again'][user] = True; st.rerun()
@@ -241,11 +236,8 @@ elif st.session_state.view == "game_room":
 
     elif gs['game_state'] == 'VOTING_IMPOSTOR':
         st.subheader("Kto jest Impostorem?")
-        # LICZNIK GŁOSÓW DLA ADMINA
         if user == ADMIN_USER:
-            count = len(gs['votes_impostor'])
-            total = len(gs['participants'])
-            st.write(f"📊 Oddano głosów: **{count} / {total}**")
+            st.info(f"📊 Oddano głosów: **{len(gs['votes_impostor'])} / {len(gs['participants'])}**")
 
         others = [p for p in gs['participants'] if p != user]
         choice = st.selectbox("Wskaż", others) if others else None
@@ -254,19 +246,43 @@ elif st.session_state.view == "game_room":
             st.success("Głos oddany!")
 
         if user == ADMIN_USER and st.button("🏆 PODLICZ I POKAŻ RANKING"):
-            results = []
+            results_summary = []
+
+            # 1. Zlicz głosy na poszczególnych graczy
+            vote_counts = pd.Series(gs['votes_impostor'].values()).value_counts()
+
+            # 2. Przelicz punkty dla każdego uczestnika
             for p in gs['cached_players']:
                 if p['login'] in gs['participants']:
-                    add = 0
+                    added_pts = 0
                     if p['login'] in gs['impostors']:
-                        if not any(v == p['login'] for v in gs['votes_impostor'].values()): add = 2
+                        # Punktacja Impostora: (Gracze - 1) - głosy na niego
+                        votes_on_him = vote_counts.get(p['login'], 0)
+                        added_pts = (len(gs['participants']) - 1) - votes_on_him
                     else:
-                        if gs['votes_impostor'].get(p['login']) in gs['impostors']: add = 1
-                    p['score'] = int(float(p.get('score', 0))) + add
-                    results.append(f"{p['login']}: +{add}")
+                        # Punktacja Gracza: 2 pkt za trafienie w dowolnego impostora
+                        voted_for = gs['votes_impostor'].get(p['login'])
+                        if voted_for in gs['impostors']:
+                            added_pts = 2
 
-            log_df = pd.DataFrame([{"Data": datetime.now().strftime("%H:%M"), "Wynik": " | ".join(results)}])
-            save_data("logi", pd.concat([conn.read(worksheet="logi", ttl=0), log_df], ignore_index=True))
+                    p['score'] = int(float(p.get('score', 0))) + added_pts
+                    results_summary.append(f"{p['login']}: +{added_pts}")
+
+            # 3. Zapisz Logi (Data, Hasło, Impostorzy, Wyniki)
+            log_entry = {
+                "Data": datetime.now().strftime("%H:%M"),
+                "Hasło": gs['current_word'],
+                "Impostorzy": ", ".join(gs['impostors']),
+                "Wynik": " | ".join(results_summary)
+            }
+
+            try:
+                current_logs = conn.read(worksheet="logi", ttl=0)
+                updated_logs = pd.concat([current_logs, pd.DataFrame([log_entry])], ignore_index=True)
+                save_data("logi", updated_logs)
+            except:
+                save_data("logi", pd.DataFrame([log_entry]))
+
             save_data("gracze", pd.DataFrame(gs['cached_players']))
             gs['game_state'] = 'WAITING';
             gs['votes_impostor'] = {};
@@ -274,8 +290,10 @@ elif st.session_state.view == "game_room":
 
     if user == ADMIN_USER:
         st.divider()
-        if st.button("⚙️ PANEL ADMINA"): st.session_state.view = "admin_panel"; st.rerun()
+        if st.button("⚙️ PANEL ADMINA"):
+            st.session_state.view = "admin_panel"
+            st.rerun()
     if st.button("Wyloguj"):
-        st.session_state.clear();
-        st.query_params.clear();
+        st.session_state.clear()
+        st.query_params.clear()
         st.rerun()

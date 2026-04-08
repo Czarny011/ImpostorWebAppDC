@@ -304,5 +304,3 @@ elif st.session_state.view == "game_room":
         st.session_state.clear()
         st.query_params.clear()
         st.rerun()
-
-st.markdown('<div class="footer">© Impostor Web App v1 by Dawid Czarnota</div>', unsafe_allow_html=True)

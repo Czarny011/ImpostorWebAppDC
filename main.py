@@ -160,24 +160,23 @@ elif st.session_state.view == "admin_panel":
 
     with t2:
         st.subheader("Dodaj Nowego Gracza")
-        # Dodano klucze (key), aby Streamlit mógł zresetować pola po st.rerun()
-        new_login = st.text_input("Login gracza", key="add_login")
-        new_pwd = st.text_input("Hasło gracza", type="password", key="add_pwd")
 
-        if st.button("➕ DODAJ GRACZA"):
-            if new_login and new_pwd:
-                if not any(p['login'] == new_login for p in gs['cached_players']):
-                    gs['cached_players'].append({'login': new_login, 'pwd': new_pwd, 'score': 0})
-                    save_data("gracze", pd.DataFrame(gs['cached_players']))
-                    st.success(f"Gracz {new_login} dodany!")
-                    # Czyszczenie pól w session_state przed rerunem
-                    st.session_state.add_login = ""
-                    st.session_state.add_pwd = ""
-                    st.rerun()
+        with st.form("add_player_form", clear_on_submit=True):
+            new_login = st.text_input("Login gracza")
+            new_pwd = st.text_input("Hasło gracza", type="password")
+            submit_button = st.form_submit_button("➕ DODAJ GRACZA")
+
+            if submit_button:
+                if new_login and new_pwd:
+                    if not any(p['login'] == new_login for p in gs['cached_players']):
+                        gs['cached_players'].append({'login': new_login, 'pwd': new_pwd, 'score': 0})
+                        save_data("gracze", pd.DataFrame(gs['cached_players']))
+                        st.success(f"Gracz {new_login} dodany!")
+                        st.rerun()
+                    else:
+                        st.error("Gracz o tym loginie już istnieje!")
                 else:
-                    st.error("Gracz o tym loginie już istnieje!")
-            else:
-                st.warning("Uzupełnij login i hasło!")
+                    st.warning("Uzupełnij login i hasło!")
 
         st.divider()
         if st.button("🔄 ODŚWIEŻ LISTĘ Z GOOGLE"):
@@ -314,4 +313,5 @@ elif st.session_state.view == "game_room":
         st.query_params.clear()
         st.rerun()
 
-st.markdown('<div class="footer">© Impostor Web App v1 by Dawid Czarnota</div>', unsafe_allow_html=True)
+# --- STOPKA ---
+st.markdown('<div class="footer">©Impostor Web App v1 by Dawid Czarnota</div>', unsafe_allow_html=True)

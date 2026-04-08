@@ -160,14 +160,19 @@ elif st.session_state.view == "admin_panel":
 
     with t2:
         st.subheader("Dodaj Nowego Gracza")
-        new_login = st.text_input("Login gracza")
-        new_pwd = st.text_input("Hasło gracza", type="password")
+        # Dodano klucze (key), aby Streamlit mógł zresetować pola po st.rerun()
+        new_login = st.text_input("Login gracza", key="add_login")
+        new_pwd = st.text_input("Hasło gracza", type="password", key="add_pwd")
+
         if st.button("➕ DODAJ GRACZA"):
             if new_login and new_pwd:
                 if not any(p['login'] == new_login for p in gs['cached_players']):
                     gs['cached_players'].append({'login': new_login, 'pwd': new_pwd, 'score': 0})
                     save_data("gracze", pd.DataFrame(gs['cached_players']))
                     st.success(f"Gracz {new_login} dodany!")
+                    # Czyszczenie pól w session_state przed rerunem
+                    st.session_state.add_login = ""
+                    st.session_state.add_pwd = ""
                     st.rerun()
                 else:
                     st.error("Gracz o tym loginie już istnieje!")
@@ -272,16 +277,12 @@ elif st.session_state.view == "game_room":
                 if p['login'] in gs['participants']:
                     added_pts = 0
                     if p['login'] in gs['impostors']:
-                        # Punktacja Impostora: (Gracze - 1) - głosy na niego
                         votes_on_him = voted_names.count(p['login'])
                         added_pts = (len(gs['participants']) - 1) - votes_on_him
                     else:
-                        # Punktacja Gracza: 2 pkt za trafienie w dowolnego impostora
                         voted_for = gs['votes_impostor'].get(p['login'])
                         if voted_for in gs['impostors']:
                             added_pts = 2
-
-                    # AKTUALIZACJA W PAMIĘCI (to naprawia ranking)
                     p['score'] = int(float(p.get('score', 0))) + added_pts
                     results_summary.append(f"{p['login']}: +{added_pts}")
 

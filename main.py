@@ -9,7 +9,7 @@ from streamlit_gsheets import GSheetsConnection
 ADMIN_USER = "Dawid"
 ADMIN_PASSWORD = "Printiverse69"
 
-st.set_page_config(page_title="Impostor Cloud v3.6", page_icon="🎭", layout="centered")
+st.set_page_config(page_title="Impostor Cloud v3.7", page_icon="🎭", layout="centered")
 
 # --- STYLE CSS ---
 st.markdown(f"""
@@ -49,7 +49,7 @@ def get_gs():
     p_df = load_sheet("gracze")
     players = p_df.to_dict('records') if not p_df.empty else []
 
-    # Upewnij się, że Admin zawsze istnieje
+    # Admin musi być w bazie
     if not any(p['login'] == ADMIN_USER for p in players):
         players.append({'login': ADMIN_USER, 'pwd': ADMIN_PASSWORD, 'score': 0})
 
@@ -64,14 +64,18 @@ def get_gs():
         'votes_impostor': {},
         'settings': {"impostors": 1, "hints": True},
         'reg_counter': 0,
-        'loaded_words': pd.DataFrame()  # Tu przechowujemy wczytaną bazę
+        'loaded_words': pd.DataFrame()
     }
 
 
 gs = get_gs()
+# Bezpiecznik: jeśli po aktualizacji kodu brakuje klucza w gs
+if 'loaded_words' not in gs:
+    gs['loaded_words'] = pd.DataFrame()
+
 st_autorefresh(interval=2000, key="global_refresh")
 
-# --- LOGIKA WIDOKÓW ---
+# --- LOGIKA LOGOWANIA ---
 if 'logged_user' not in st.session_state:
     q_user = st.query_params.get("gracz")
     if q_user:
@@ -101,7 +105,7 @@ if st.session_state.view == "login":
             st.query_params["gracz"] = u
             st.rerun()
         else:
-            st.error("Błąd logowania")
+            st.error("Błędne dane!")
 
 # --- EKRAN 2: PANEL ADMINA ---
 elif st.session_state.view == "admin_panel":
@@ -117,34 +121,44 @@ elif st.session_state.view == "admin_panel":
         selected = st.multiselect("Gracze w rundzie", all_nicks, default=all_nicks)
 
         st.divider()
-        # SPRAWDZANIE CZY BAZA JEST WCZYTANA
-        if gs['loaded_words'].empty:
-            st.warning("⚠️ Baza haseł nie jest wczytana do pamięci!")
+        # Naprawa błędu KeyError przez bezpieczny dostęp
+        is_empty = gs.get('loaded_words', pd.DataFrame()).empty
+
+        if is_empty:
+            st.warning("⚠️ Baza haseł nie jest wczytana!")
             if st.button("📥 WCZYTAJ HASŁA Z GOOGLE SHEETS"):
                 w_df = load_sheet("baza_hasel")
                 if not w_df.empty:
                     gs['loaded_words'] = w_df
-                    st.success(f"Wczytano {len(w_df)} haseł!")
+                    st.success("Wczytano hasła!")
                     st.rerun()
+                else:
+                    st.error("Nie udało się pobrać haseł z Arkusza!")
         else:
-            st.success(f"✅ Baza gotowa ({len(gs['loaded_words'])} haseł)")
-            if st.button("🔄 ODŚWIEŻ BAZĘ (jeśli zmieniłeś coś w Google)"):
+            st.success(f"✅ Baza haseł gotowa ({len(gs['loaded_words'])} szt.)")
+            if st.button("🔄 ODŚWIEŻ BAZĘ"):
                 gs['loaded_words'] = pd.DataFrame()
                 st.rerun()
 
-        if gs['game_state'] == 'WAITING' and not gs['loaded_words'].empty:
-            if st.button("🚀 ROZPOCZNIJ RUNDĘ", type="primary"):
-                valid = gs['loaded_words'][gs['loaded_words']["Hasło"].str.strip().astype(bool)]
-                row = valid.sample(1).iloc[0]
-                gs.update({
-                    'current_word': str(row['Hasło']),
-                    'current_hint': str(row['Podpowiedź']) if 'Podpowiedź' in row else "",
-                    'participants': selected,
-                    'impostors': random.sample(selected, min(len(selected), gs['settings']['impostors'])),
-                    'game_state': 'PLAYING', 'votes_again': {}, 'votes_impostor': {}
-                })
-                st.session_state.view = "game_room";
-                st.rerun()
+            if gs['game_state'] == 'WAITING':
+                if st.button("🚀 ROZPOCZNIJ RUNDĘ", type="primary"):
+                    # Filtrujemy puste wiersze
+                    valid = gs['loaded_words'][gs['loaded_words']["Hasło"].notna()]
+                    valid = valid[valid["Hasło"].str.strip() != ""]
+
+                    if not valid.empty:
+                        row = valid.sample(1).iloc[0]
+                        gs.update({
+                            'current_word': str(row['Hasło']),
+                            'current_hint': str(row['Podpowiedź']) if 'Podpowiedź' in row else "",
+                            'participants': selected,
+                            'impostors': random.sample(selected, min(len(selected), gs['settings']['impostors'])),
+                            'game_state': 'PLAYING', 'votes_again': {}, 'votes_impostor': {}
+                        })
+                        st.session_state.view = "game_room"
+                        st.rerun()
+                    else:
+                        st.error("Baza jest wczytana, ale nie zawiera poprawnych haseł!")
 
         st.divider()
         if st.button("🏠 POWRÓT DO ARENY"):
@@ -168,19 +182,20 @@ elif st.session_state.view == "admin_panel":
         n_u = st.text_input("Nick", key=f"nu_{gs['reg_counter']}")
         n_p = st.text_input("Hasło", type="password", key=f"np_{gs['reg_counter']}")
         if st.button("DODAJ"):
-            gs['players'].append({'login': n_u, 'pwd': n_p, 'score': 0})
-            save_sheet("gracze", pd.DataFrame(gs['players']));
-            gs['reg_counter'] += 1;
-            st.rerun()
+            if n_u:
+                gs['players'].append({'login': n_u.strip(), 'pwd': n_p, 'score': 0})
+                save_sheet("gracze", pd.DataFrame(gs['players']));
+                gs['reg_counter'] += 1;
+                st.rerun()
 
     with t3:
-        st.subheader("Podgląd/Edycja haseł w Arkuszu")
+        st.subheader("Edycja haseł w Arkuszu")
         b_df = load_sheet("baza_hasel")
         new_baza = st.data_editor(b_df, num_rows="dynamic", use_container_width=True)
-        if st.button("ZAPISZ ZMIANY DO ARKUSZA"):
+        if st.button("ZAPISZ DO ARKUSZA"):
             save_sheet("baza_hasel", new_baza)
-            gs['loaded_words'] = pd.DataFrame()  # Wymuś przeładowanie pamięci
-            st.success("Zapisano! Wróć do zakładki Gra i wczytaj bazę ponownie.")
+            gs['loaded_words'] = pd.DataFrame()
+            st.rerun()
 
     with t4:
         st.dataframe(load_sheet("logi"), use_container_width=True)
@@ -195,14 +210,14 @@ elif st.session_state.view == "game_room":
         rdf = pd.DataFrame(gs['players'])
         if not rdf.empty:
             st.table(rdf[['login', 'score']].sort_values(by='score', ascending=False))
-        st.info("Oczekiwanie na start przez Admina...")
+        st.info("Czekaj na ruch Admina...")
 
     elif gs['game_state'] == 'PLAYING':
         if user in gs['participants']:
             st.markdown("<div class='role-card'>", unsafe_allow_html=True)
             if user in gs['impostors']:
                 st.error("JESTEŚ IMPOSTOREM! 😈")
-                if gs['settings']['hints']: st.write(f"Podpowiedź (tylko dla Ciebie): **{gs['current_hint']}**")
+                if gs['settings']['hints']: st.write(f"Podpowiedź: **{gs['current_hint']}**")
             else:
                 st.success("JESTEŚ GRACZEM 😇")
                 st.write(f"Hasło: **{gs['current_word']}**")

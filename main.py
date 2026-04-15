@@ -7,8 +7,7 @@ from streamlit_gsheets import GSheetsConnection
 
 # --- KONFIGURACJA ---
 ADMIN_USER = "Dawid"
-# Pobieranie hasła z Secrets - upewnij się, że w panelu Streamlit jest admin_password = "..."
-ADMIN_PASSWORD = st.secrets[ADMIN_PASSWORD]
+ADMIN_PASSWORD = "Printiverse69"
 
 st.set_page_config(page_title="Impostor Cloud v4.4", page_icon="🎭", layout="centered")
 
@@ -91,6 +90,7 @@ def start_new_round():
 
     if not gs['loaded_words'].empty:
         all_valid = gs['loaded_words'][gs['loaded_words']["Hasło"].notna()]
+        # Filtrowanie haseł, których nie było jeszcze w tej sesji
         unused_valid = all_valid[~all_valid["Hasło"].isin(gs['used_words'])]
 
         if unused_valid.empty and not all_valid.empty:
@@ -169,6 +169,7 @@ elif st.session_state.view == "admin_panel":
 
     with t2:
         st.subheader("Dodaj Nowego Gracza")
+        # Formularz zapewnia automatyczne czyszczenie pól po kliknięciu przycisku
         with st.form("add_player_form", clear_on_submit=True):
             new_login = st.text_input("Login gracza")
             new_pwd = st.text_input("Hasło gracza", type="password")
@@ -316,4 +317,4 @@ elif st.session_state.view == "game_room":
         st.query_params.clear()
         st.rerun()
 
-st.markdown('<div class="footer">©Impostor Web App v1 by Dawid Czarnota</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer"> ©Impostor Web App v1 by Dawid Czarnota</div>', unsafe_allow_html=True)

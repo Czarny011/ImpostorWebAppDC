@@ -8,7 +8,7 @@ from streamlit_gsheets import GSheetsConnection
 # --- KONFIGURACJA ---
 ADMIN_USER = "Dawid"
 # Pobieranie hasła z Secrets - upewnij się, że w panelu Streamlit jest admin_password = "..."
-admin_password = st.secrets[admin_password]
+admin_password = st.secrets
 
 st.set_page_config(page_title="Impostor Cloud v4.4", page_icon="🎭", layout="centered")
 

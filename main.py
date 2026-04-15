@@ -7,7 +7,8 @@ from streamlit_gsheets import GSheetsConnection
 
 # --- KONFIGURACJA ---
 ADMIN_USER = "Dawid"
-ADMIN_PASSWORD = "Printiverse69"
+# Zmieniono na pobieranie z Secrets dla bezpieczeństwa
+ADMIN_PASSWORD = st.secrets["admin_password"]
 
 st.set_page_config(page_title="Impostor Cloud v4.4", page_icon="🎭", layout="centered")
 
@@ -65,7 +66,8 @@ def init_game_state():
         'votes_impostor': {},
         'settings': {"impostors": 1, "hints": True},
         'loaded_words': pd.DataFrame(),
-        'cached_players': []
+        'cached_players': [],
+        'used_words': []  # Dodano listę zużytych haseł
     }
 
 
@@ -89,10 +91,22 @@ def start_new_round():
         if not w_df.empty: gs['loaded_words'] = w_df
 
     if not gs['loaded_words'].empty:
-        valid = gs['loaded_words'][gs['loaded_words']["Hasło"].notna()]
-        if not valid.empty:
+        # Filtrowanie haseł, które nie były jeszcze użyte
+        all_valid = gs['loaded_words'][gs['loaded_words']["Hasło"].notna()]
+        unused_valid = all_valid[~all_valid["Hasło"].isin(gs['used_words'])]
+
+        # Jeśli wszystkie hasła zostały zużyte, zresetuj listę
+        if unused_valid.empty and not all_valid.empty:
+            gs['used_words'] = []
+            unused_valid = all_valid
+
+        if not unused_valid.empty:
             active_list = gs['participants'] if gs['participants'] else [p['login'] for p in gs['cached_players']]
-            row = valid.sample(1).iloc[0]
+            row = unused_valid.sample(1).iloc[0]
+
+            # Dodaj hasło do listy zużytych
+            gs['used_words'].append(str(row['Hasło']))
+
             gs.update({
                 'current_word': str(row['Hasło']),
                 'current_hint': str(row['Podpowiedź']) if 'Podpowiedź' in row else "",

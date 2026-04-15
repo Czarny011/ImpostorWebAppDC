@@ -413,4 +413,4 @@ elif st.session_state.view == "game_room":
         st.session_state.clear()
         st.rerun()
 
-st.markdown('<div class="footer">CYBERPUNK INTERFACE ACTIVATED © 2024</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer">©Impostor Web App v1 by Dawid Czarnota</div>', unsafe_allow_html=True)

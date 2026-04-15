@@ -9,7 +9,7 @@ from streamlit_gsheets import GSheetsConnection
 ADMIN_USER = "Dawid"
 ADMIN_PASSWORD = "Printiverse69"
 
-st.set_page_config(page_title="Impostor Cloud v4.5", page_icon="🎭", layout="centered")
+st.set_page_config(page_title="Impostor Cloud v4.6", page_icon="🎭", layout="centered")
 
 # --- STYLE CSS ---
 st.markdown(f"""
@@ -35,9 +35,9 @@ def get_players_from_sheet():
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=10)  # Krótszy cache dla haseł, bo teraz zapisujemy ich zużycie
 def get_words_from_sheet():
     try:
+        # Wyłączamy cache całkowicie dla haseł, aby system zawsze widział kolumnę 'Użyte'
         df = conn.read(worksheet="baza_hasel", ttl=0)
         return df.dropna(how='all').reset_index(drop=True) if df is not None else pd.DataFrame()
     except:
@@ -84,12 +84,12 @@ st_autorefresh(interval=5000, key="global_refresh")
 def start_new_round():
     w_df = get_words_from_sheet()
     if not w_df.empty:
-        # Sprawdzamy, czy kolumna 'Użyte' istnieje, jeśli nie - tworzymy ją w pamięci
+        # Jeśli kolumny 'Użyte' nie ma (np. błąd odczytu), tworzymy ją wirtualnie
         if 'Użyte' not in w_df.columns:
             w_df['Użyte'] = ""
 
         # Filtrujemy tylko nieużyte hasła
-        available_words = w_df[w_df['Użyte'] != "TAK"]
+        available_words = w_df[w_df['Użyte'].astype(str).str.upper() != "TAK"]
 
         # Jeśli brak haseł, automatycznie resetujemy wszystko w arkuszu
         if available_words.empty:

@@ -7,7 +7,7 @@ from streamlit_gsheets import GSheetsConnection
 
 # --- KONFIGURACJA ---
 ADMIN_USER = "Dawid"
-# Zmieniono na pobieranie z Secrets dla bezpieczeństwa
+# Pobieranie hasła z Secrets - upewnij się, że w panelu Streamlit jest admin_password = "..."
 ADMIN_PASSWORD = st.secrets["admin_password"]
 
 st.set_page_config(page_title="Impostor Cloud v4.4", page_icon="🎭", layout="centered")
@@ -67,13 +67,13 @@ def init_game_state():
         'settings': {"impostors": 1, "hints": True},
         'loaded_words': pd.DataFrame(),
         'cached_players': [],
-        'used_words': []  # Dodano listę zużytych haseł
+        'used_words': []
     }
 
 
 gs = init_game_state()
 
-# SYNCHRONIZACJA GRACZY (Ładowanie początkowe)
+# SYNCHRONIZACJA GRACZY
 if not gs['cached_players']:
     p_df = get_players_from_sheet()
     if not p_df.empty:
@@ -84,18 +84,15 @@ if not gs['cached_players']:
 st_autorefresh(interval=5000, key="global_refresh")
 
 
-# LOGIKA POMOCNICZA: START RUNDY
 def start_new_round():
     if gs['loaded_words'].empty:
         w_df = get_words_from_sheet()
         if not w_df.empty: gs['loaded_words'] = w_df
 
     if not gs['loaded_words'].empty:
-        # Filtrowanie haseł, które nie były jeszcze użyte
         all_valid = gs['loaded_words'][gs['loaded_words']["Hasło"].notna()]
         unused_valid = all_valid[~all_valid["Hasło"].isin(gs['used_words'])]
 
-        # Jeśli wszystkie hasła zostały zużyte, zresetuj listę
         if unused_valid.empty and not all_valid.empty:
             gs['used_words'] = []
             unused_valid = all_valid
@@ -103,8 +100,6 @@ def start_new_round():
         if not unused_valid.empty:
             active_list = gs['participants'] if gs['participants'] else [p['login'] for p in gs['cached_players']]
             row = unused_valid.sample(1).iloc[0]
-
-            # Dodaj hasło do listy zużytych
             gs['used_words'].append(str(row['Hasło']))
 
             gs.update({
@@ -174,7 +169,6 @@ elif st.session_state.view == "admin_panel":
 
     with t2:
         st.subheader("Dodaj Nowego Gracza")
-
         with st.form("add_player_form", clear_on_submit=True):
             new_login = st.text_input("Login gracza")
             new_pwd = st.text_input("Hasło gracza", type="password")
@@ -261,11 +255,9 @@ elif st.session_state.view == "game_room":
         st.subheader("Gramy dalej to samo?")
         if user == ADMIN_USER:
             st.info(f"📊 Oddano głosów: **{len(gs['votes_again'])} / {len(gs['participants'])}**")
-
         c1, c2 = st.columns(2)
         if c1.button("TAK"): gs['votes_again'][user] = True; st.rerun()
         if c2.button("NIE"): gs['votes_again'][user] = False; st.rerun()
-
         if user == ADMIN_USER and st.button("PODLICZ"):
             yes = sum(1 for v in gs['votes_again'].values() if v)
             gs['game_state'] = 'PLAYING' if yes > (len(gs['votes_again']) / 2) else 'VOTING_IMPOSTOR'
@@ -276,13 +268,11 @@ elif st.session_state.view == "game_room":
         st.subheader("Kto jest Impostorem?")
         if user == ADMIN_USER:
             st.info(f"📊 Oddano głosów: **{len(gs['votes_impostor'])} / {len(gs['participants'])}**")
-
         others = [p for p in gs['participants'] if p != user]
         choice = st.selectbox("Wskaż", others) if others else None
         if st.button("Głosuj") and choice:
             gs['votes_impostor'][user] = choice
             st.success("Głos oddany!")
-
         if user == ADMIN_USER and st.button("🏆 PODLICZ I POKAŻ RANKING"):
             results_summary = []
             voted_names = list(gs['votes_impostor'].values())
@@ -311,7 +301,6 @@ elif st.session_state.view == "game_room":
                 save_data("logi", updated_logs)
             except:
                 save_data("logi", pd.DataFrame([log_entry]))
-
             save_data("gracze", pd.DataFrame(gs['cached_players']))
             gs['game_state'] = 'WAITING'
             gs['votes_impostor'] = {}
@@ -327,5 +316,4 @@ elif st.session_state.view == "game_room":
         st.query_params.clear()
         st.rerun()
 
-# --- STOPKA ---
 st.markdown('<div class="footer">©Impostor Web App v1 by Dawid Czarnota</div>', unsafe_allow_html=True)

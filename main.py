@@ -239,7 +239,7 @@ if 'view' not in st.session_state:
 
 def draw_header(title="IMPOSTOR"):
     st.markdown(f"<h1 class='impostor-title'>{title}</h1>", unsafe_allow_html=True)
-    st.markdown("<span class='brand-text'>CYBERPUNK EDITION</span>", unsafe_allow_html=True)
+    st.markdown("<span class='brand-text'>BY D.CZ.</span>", unsafe_allow_html=True)
 
 
 # --- EKRAN 1: LOGOWANIE ---

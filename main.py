@@ -9,7 +9,7 @@ from streamlit_gsheets import GSheetsConnection
 ADMIN_USER = "Dawid"
 ADMIN_PASSWORD = "Printiverse69"
 
-st.set_page_config(page_title="Impostor Cloud v4.4", page_icon="🎭", layout="centered")
+st.set_page_config(page_title="Impostor Cloud v4.5", page_icon="🎭", layout="centered")
 
 # --- STYLE CSS ---
 st.markdown(f"""
@@ -35,7 +35,7 @@ def get_players_from_sheet():
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=10)  # Krótszy cache dla haseł, bo teraz zapisujemy ich zużycie
 def get_words_from_sheet():
     try:
         df = conn.read(worksheet="baza_hasel", ttl=0)
@@ -64,9 +64,7 @@ def init_game_state():
         'votes_again': {},
         'votes_impostor': {},
         'settings': {"impostors": 1, "hints": True},
-        'loaded_words': pd.DataFrame(),
-        'cached_players': [],
-        'used_words': []
+        'cached_players': []
     }
 
 
@@ -84,23 +82,31 @@ st_autorefresh(interval=5000, key="global_refresh")
 
 
 def start_new_round():
-    if gs['loaded_words'].empty:
-        w_df = get_words_from_sheet()
-        if not w_df.empty: gs['loaded_words'] = w_df
+    w_df = get_words_from_sheet()
+    if not w_df.empty:
+        # Sprawdzamy, czy kolumna 'Użyte' istnieje, jeśli nie - tworzymy ją w pamięci
+        if 'Użyte' not in w_df.columns:
+            w_df['Użyte'] = ""
 
-    if not gs['loaded_words'].empty:
-        all_valid = gs['loaded_words'][gs['loaded_words']["Hasło"].notna()]
-        # Filtrowanie haseł, których nie było jeszcze w tej sesji
-        unused_valid = all_valid[~all_valid["Hasło"].isin(gs['used_words'])]
+        # Filtrujemy tylko nieużyte hasła
+        available_words = w_df[w_df['Użyte'] != "TAK"]
 
-        if unused_valid.empty and not all_valid.empty:
-            gs['used_words'] = []
-            unused_valid = all_valid
+        # Jeśli brak haseł, automatycznie resetujemy wszystko w arkuszu
+        if available_words.empty:
+            w_df['Użyte'] = ""
+            save_data("baza_hasel", w_df)
+            available_words = w_df
 
-        if not unused_valid.empty:
+        if not available_words.empty:
             active_list = gs['participants'] if gs['participants'] else [p['login'] for p in gs['cached_players']]
-            row = unused_valid.sample(1).iloc[0]
-            gs['used_words'].append(str(row['Hasło']))
+
+            # Losujemy hasło
+            idx = available_words.sample(1).index[0]
+            row = w_df.loc[idx]
+
+            # Oznaczamy jako użyte w arkuszu
+            w_df.at[idx, 'Użyte'] = "TAK"
+            save_data("baza_hasel", w_df)
 
             gs.update({
                 'current_word': str(row['Hasło']),
@@ -156,25 +162,34 @@ elif st.session_state.view == "admin_panel":
         gs['participants'] = st.multiselect("Gracze w rundzie", all_nicks, default=all_nicks)
 
         st.divider()
-        if gs['loaded_words'].empty:
-            if st.button("📥 WCZYTAJ HASŁA Z BAZY"):
-                gs['loaded_words'] = get_words_from_sheet()
+        if gs['game_state'] == 'PLAYING':
+            if st.button("🔙 POWRÓT DO TRWAJĄCEJ RUNDY", type="primary"):
+                st.session_state.view = "game_room"
                 st.rerun()
+            if st.button("🔄 WYMUSZ NOWĄ RUNDĘ (NOWE HASŁO)"):
+                if start_new_round():
+                    st.session_state.view = "game_room"
+                    st.rerun()
         else:
-            st.success(f"✅ Baza haseł gotowa")
             if st.button("🚀 ROZPOCZNIJ RUNDĘ", type="primary"):
                 if start_new_round():
                     st.session_state.view = "game_room"
                     st.rerun()
 
+        st.divider()
+        if st.button("♻️ ZRESETUJ PULĘ HASEŁ (CZYŚCI 'UŻYTE')"):
+            w_df = get_words_from_sheet()
+            if 'Użyte' in w_df.columns:
+                w_df['Użyte'] = ""
+                save_data("baza_hasel", w_df)
+                st.success("Pula haseł została zresetowana!")
+
     with t2:
         st.subheader("Dodaj Nowego Gracza")
-        # Formularz zapewnia automatyczne czyszczenie pól po kliknięciu przycisku
         with st.form("add_player_form", clear_on_submit=True):
             new_login = st.text_input("Login gracza")
             new_pwd = st.text_input("Hasło gracza", type="password")
             submit_button = st.form_submit_button("➕ DODAJ GRACZA")
-
             if submit_button:
                 if new_login and new_pwd:
                     if not any(p['login'] == new_login for p in gs['cached_players']):
@@ -208,9 +223,8 @@ elif st.session_state.view == "admin_panel":
     with t3:
         curr_words = get_words_from_sheet()
         new_w = st.data_editor(curr_words, num_rows="dynamic", use_container_width=True)
-        if st.button("ZAPISZ HASEŁA"):
+        if st.button("ZAPISZ ZMIANY W BAZIE"):
             save_data("baza_hasel", new_w)
-            gs['loaded_words'] = pd.DataFrame()
             st.rerun()
 
     with t4:
@@ -226,14 +240,11 @@ elif st.session_state.view == "game_room":
         df_rank = pd.DataFrame(gs['cached_players'])[['login', 'score']].sort_values(by='score', ascending=False)
         df_rank['score'] = df_rank['score'].apply(lambda x: int(float(x)))
         st.table(df_rank)
-
         if user == ADMIN_USER:
             st.divider()
-            if st.button("🚀 KOLEJNA RUNDA (SZYBKI START)", type="primary"):
+            if st.button("🚀 ROZPOCZNIJ RUNDĘ", type="primary"):
                 if start_new_round():
                     st.rerun()
-                else:
-                    st.error("Najpierw wczytaj bazę w Panelu Admina!")
         else:
             st.info("Czekaj na start kolejnej tury przez Admina...")
 
@@ -247,10 +258,15 @@ elif st.session_state.view == "game_room":
                 st.success("JESTEŚ GRACZEM 😇")
                 st.write(f"Hasło: **{gs['current_word']}**")
             st.markdown("</div>", unsafe_allow_html=True)
-
-        if user == ADMIN_USER and st.button("🔔 GŁOSOWANIE", type="primary"):
-            gs['game_state'] = 'VOTING_AGAIN'
-            st.rerun()
+        if user == ADMIN_USER:
+            st.divider()
+            c1, c2 = st.columns(2)
+            if c1.button("🔔 GŁOSOWANIE", type="primary"):
+                gs['game_state'] = 'VOTING_AGAIN'
+                st.rerun()
+            if c2.button("🔄 RESTART RUNDY"):
+                if start_new_round():
+                    st.rerun()
 
     elif gs['game_state'] == 'VOTING_AGAIN':
         st.subheader("Gramy dalej to samo?")
@@ -289,13 +305,8 @@ elif st.session_state.view == "game_room":
                             added_pts = 2
                     p['score'] = int(float(p.get('score', 0))) + added_pts
                     results_summary.append(f"{p['login']}: +{added_pts}")
-
-            log_entry = {
-                "Data": datetime.now().strftime("%H:%M"),
-                "Hasło": gs['current_word'],
-                "Impostorzy": ", ".join(gs['impostors']),
-                "Wynik": " | ".join(results_summary)
-            }
+            log_entry = {"Data": datetime.now().strftime("%H:%M"), "Hasło": gs['current_word'],
+                         "Impostorzy": ", ".join(gs['impostors']), "Wynik": " | ".join(results_summary)}
             try:
                 current_logs = conn.read(worksheet="logi", ttl=0)
                 updated_logs = pd.concat([current_logs, pd.DataFrame([log_entry])], ignore_index=True)
@@ -317,4 +328,4 @@ elif st.session_state.view == "game_room":
         st.query_params.clear()
         st.rerun()
 
-st.markdown('<div class="footer"> ©Impostor Web App v1 by Dawid Czarnota</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer">©Impostor Web App v1 by Dawid Czarnota</div>', unsafe_allow_html=True)

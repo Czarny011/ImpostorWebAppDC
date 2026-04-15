@@ -9,7 +9,7 @@ from streamlit_gsheets import GSheetsConnection
 ADMIN_USER = "Dawid"
 ADMIN_PASSWORD = "Printiverse69"
 
-st.set_page_config(page_title="Impostor Cloud v4.6", page_icon="🎭", layout="centered")
+st.set_page_config(page_title="Impostor Cloud v4.7", page_icon="🎭", layout="centered")
 
 # --- STYLE CSS ---
 st.markdown(f"""
@@ -37,7 +37,7 @@ def get_players_from_sheet():
 
 def get_words_from_sheet():
     try:
-        # Wyłączamy cache całkowicie dla haseł, aby system zawsze widział kolumnę 'Użyte'
+        # Brak cache dla haseł, aby system zawsze widział aktualne statusy 'Użyte'
         df = conn.read(worksheet="baza_hasel", ttl=0)
         return df.dropna(how='all').reset_index(drop=True) if df is not None else pd.DataFrame()
     except:
@@ -46,6 +46,8 @@ def get_words_from_sheet():
 
 def save_data(name, df):
     try:
+        # Wypełniamy puste wartości, aby uniknąć błędów w Google Sheets
+        df = df.fillna("")
         conn.update(worksheet=name, data=df)
         st.cache_data.clear()
     except Exception as e:
@@ -84,28 +86,29 @@ st_autorefresh(interval=5000, key="global_refresh")
 def start_new_round():
     w_df = get_words_from_sheet()
     if not w_df.empty:
-        # Jeśli kolumny 'Użyte' nie ma (np. błąd odczytu), tworzymy ją wirtualnie
+        # Inicjalizacja kolumny liczbowej 'Użyte' jeśli nie istnieje
         if 'Użyte' not in w_df.columns:
-            w_df['Użyte'] = ""
+            w_df['Użyte'] = 0
 
-        # Filtrujemy tylko nieużyte hasła
-        available_words = w_df[w_df['Użyte'].astype(str).str.upper() != "TAK"]
+        # Filtrowanie: bierzemy hasła, które nie mają przypisanej jedynki
+        # Konwersja na numerics, by uniknąć błędów typu danych
+        w_df['Użyte'] = pd.to_numeric(w_df['Użyte'], errors='coerce').fillna(0)
+        available_words = w_df[w_df['Użyte'] != 1]
 
-        # Jeśli brak haseł, automatycznie resetujemy wszystko w arkuszu
+        # Jeśli wszystkie hasła zostały zużyte - resetujemy kolumnę 'Użyte'
         if available_words.empty:
-            w_df['Użyte'] = ""
+            w_df['Użyte'] = 0
             save_data("baza_hasel", w_df)
             available_words = w_df
 
         if not available_words.empty:
             active_list = gs['participants'] if gs['participants'] else [p['login'] for p in gs['cached_players']]
 
-            # Losujemy hasło
             idx = available_words.sample(1).index[0]
             row = w_df.loc[idx]
 
-            # Oznaczamy jako użyte w arkuszu
-            w_df.at[idx, 'Użyte'] = "TAK"
+            # Zapisujemy 1 jako znacznik zużycia
+            w_df.at[idx, 'Użyte'] = 1
             save_data("baza_hasel", w_df)
 
             gs.update({
@@ -162,6 +165,7 @@ elif st.session_state.view == "admin_panel":
         gs['participants'] = st.multiselect("Gracze w rundzie", all_nicks, default=all_nicks)
 
         st.divider()
+        # Logika powrotu do gry bez resetowania rundy
         if gs['game_state'] == 'PLAYING':
             if st.button("🔙 POWRÓT DO TRWAJĄCEJ RUNDY", type="primary"):
                 st.session_state.view = "game_room"
@@ -179,10 +183,9 @@ elif st.session_state.view == "admin_panel":
         st.divider()
         if st.button("♻️ ZRESETUJ PULĘ HASEŁ (CZYŚCI 'UŻYTE')"):
             w_df = get_words_from_sheet()
-            if 'Użyte' in w_df.columns:
-                w_df['Użyte'] = ""
-                save_data("baza_hasel", w_df)
-                st.success("Pula haseł została zresetowana!")
+            w_df['Użyte'] = 0
+            save_data("baza_hasel", w_df)
+            st.success("Wszystkie hasła są ponownie dostępne!")
 
     with t2:
         st.subheader("Dodaj Nowego Gracza")
@@ -258,6 +261,7 @@ elif st.session_state.view == "game_room":
                 st.success("JESTEŚ GRACZEM 😇")
                 st.write(f"Hasło: **{gs['current_word']}**")
             st.markdown("</div>", unsafe_allow_html=True)
+
         if user == ADMIN_USER:
             st.divider()
             c1, c2 = st.columns(2)
@@ -305,6 +309,7 @@ elif st.session_state.view == "game_room":
                             added_pts = 2
                     p['score'] = int(float(p.get('score', 0))) + added_pts
                     results_summary.append(f"{p['login']}: +{added_pts}")
+
             log_entry = {"Data": datetime.now().strftime("%H:%M"), "Hasło": gs['current_word'],
                          "Impostorzy": ", ".join(gs['impostors']), "Wynik": " | ".join(results_summary)}
             try:
@@ -313,6 +318,7 @@ elif st.session_state.view == "game_room":
                 save_data("logi", updated_logs)
             except:
                 save_data("logi", pd.DataFrame([log_entry]))
+
             save_data("gracze", pd.DataFrame(gs['cached_players']))
             gs['game_state'] = 'WAITING'
             gs['votes_impostor'] = {}
@@ -328,4 +334,4 @@ elif st.session_state.view == "game_room":
         st.query_params.clear()
         st.rerun()
 
-st.markdown('<div class="footer">©Impostor Web App v1 by Dawid Czarnota</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer"> ©Impostor Web App v1 by Dawid Czarnota</div>', unsafe_allow_html=True)

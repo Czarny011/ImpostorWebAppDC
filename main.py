@@ -100,7 +100,6 @@ st.markdown("""
 
     .stProgress > div > div > div > div { background-color: #00d4ff; }
 
-    /* Style dla tabeli rankingu */
     [data-testid="stTable"] {
         background-color: rgba(255, 255, 255, 0.05);
         border-radius: 10px;
@@ -143,6 +142,7 @@ def save_data(name, df):
 def init_game_state():
     return {
         'game_state': 'WAITING', 'current_word': '', 'current_hint': '', 'impostors': [],
+        'last_impostors': [],  # Nowe pole do przechowywania info o poprz. rundzie
         'participants': [], 'votes_again': {}, 'votes_impostor': {},
         'settings': {"impostors": 1, "hints": True}, 'cached_players': []
     }
@@ -150,7 +150,6 @@ def init_game_state():
 
 gs = init_game_state()
 
-# Inicjalizacja listy graczy przy starcie
 if not gs['cached_players']:
     p_df = get_players_from_sheet()
     if not p_df.empty:
@@ -166,23 +165,18 @@ def start_new_round():
     if not w_df.empty:
         if 'Użyte' not in w_df.columns:
             w_df['Użyte'] = 0
-
         w_df['Użyte'] = pd.to_numeric(w_df['Użyte'], errors='coerce').fillna(0)
         available_words = w_df[w_df['Użyte'] != 1]
-
         if available_words.empty:
             w_df['Użyte'] = 0
             save_data("baza_hasel", w_df)
             available_words = w_df
-
         if not available_words.empty:
             active_list = gs['participants'] if gs['participants'] else [p['login'] for p in gs['cached_players']]
             idx = available_words.sample(1).index[0]
             row = w_df.loc[idx]
-
             w_df.at[idx, 'Użyte'] = 1
             save_data("baza_hasel", w_df)
-
             gs.update({
                 'current_word': str(row['Hasło']),
                 'current_hint': str(row['Podpowiedź']) if 'Podpowiedź' in row else "",
@@ -229,54 +223,42 @@ if st.session_state.view == "login":
 elif st.session_state.view == "admin_panel":
     draw_header("ADMIN")
     t1, t2, t3 = st.tabs(["🎮 Sterowanie", "👥 Gracze", "📖 Baza"])
-
     with t1:
         gs['settings']['impostors'] = st.slider("Liczba Impostorów", 1, 3, gs['settings']['impostors'])
         gs['participants'] = st.multiselect("Gracze w rundzie", [p['login'] for p in gs['cached_players']],
                                             default=[p['login'] for p in gs['cached_players']])
-
         if gs['game_state'] == 'PLAYING':
-            if st.button("🔙 POWRÓT DO ARENY"):
-                st.session_state.view = "game_room"
-                st.rerun()
+            if st.button("🔙 POWRÓT DO ARENY"): st.session_state.view = "game_room"; st.rerun()
             if st.button("🔄 WYMUSZ NOWĄ RUNDĘ"):
                 if start_new_round(): st.session_state.view = "game_room"; st.rerun()
         else:
             if st.button("🚀 URUCHOM RUNDĘ", type="primary"):
                 if start_new_round(): st.session_state.view = "game_room"; st.rerun()
-
         st.divider()
-        if st.button("♻️ RESETUJ PULĘ HASEŁ (UŻYTE -> 0)"):
+        if st.button("♻️ RESETUJ PULĘ HASEŁ"):
             w_df = get_words_from_sheet()
             w_df['Użyte'] = 0
             save_data("baza_hasel", w_df)
-            st.success("Wszystkie hasła są znów dostępne!")
-
+            st.success("Baza zresetowana!")
     with t2:
         col_a, col_b = st.columns(2)
-        if col_a.button("🔥 ZERUJ PUNKTY WSZYSTKICH"):
+        if col_a.button("🔥 ZERUJ PUNKTY"):
             for p in gs['cached_players']: p['score'] = 0
             save_data("gracze", pd.DataFrame(gs['cached_players']))
-            st.success("Punkty wyzerowane!")
             st.rerun()
-
         if col_b.button("🔄 ODŚWIEŻ Z GOOGLE"):
             st.cache_data.clear()
             p_df = get_players_from_sheet()
-            if not p_df.empty:
-                gs['cached_players'] = p_df.to_dict('records')
+            if not p_df.empty: gs['cached_players'] = p_df.to_dict('records')
             st.rerun()
-
         st.divider()
         with st.form("add_p", clear_on_submit=True):
-            nl, np = st.text_input("Nowy Login"), st.text_input("Nowe Hasło", type="password")
-            if st.form_submit_button("DODAJ NOWEGO GRACZA"):
+            nl, np = st.text_input("Login"), st.text_input("Hasło", type="password")
+            if st.form_submit_button("DODAJ"):
                 if nl and np:
                     gs['cached_players'].append({'login': nl, 'pwd': np, 'score': 0})
                     save_data("gracze", pd.DataFrame(gs['cached_players']))
                     st.rerun()
-
-        st.subheader("Lista w systemie:")
         for i, pl in enumerate(gs['cached_players']):
             c1, c2 = st.columns([3, 1])
             c1.write(f"🔹 {pl['login']} ({int(float(pl.get('score', 0)))} PKT)")
@@ -284,26 +266,28 @@ elif st.session_state.view == "admin_panel":
                 gs['cached_players'].pop(i)
                 save_data("gracze", pd.DataFrame(gs['cached_players']))
                 st.rerun()
-
     with t3:
         new_w = st.data_editor(get_words_from_sheet(), num_rows="dynamic", use_container_width=True)
-        if st.button("ZAPISZ BAZĘ HASEŁ"):
-            save_data("baza_hasel", new_w)
-            st.rerun()
+        if st.button("ZAPISZ BAZĘ"): save_data("baza_hasel", new_w); st.rerun()
 
-# --- 3. ARENA (GRA) ---
+# --- 3. ARENA ---
 elif st.session_state.view == "game_room":
     draw_header("ARENA")
     user = st.session_state.logged_user
-
     if gs['game_state'] == 'WAITING':
         st.subheader("🏆 RANKING SYSTEMU")
         df_rank = pd.DataFrame(gs['cached_players'])[['login', 'score']].sort_values(by='score', ascending=False)
         df_rank['score'] = df_rank['score'].apply(lambda x: int(float(x)))
         st.table(df_rank)
+
+        # WYŚWIETLANIE INFO O IMPOSTORZE Z POPRZEDNIEJ RUNDY
+        if gs.get('last_impostors'):
+            st.markdown(
+                f"<div style='text-align:center; color:#ff4b4b; font-weight:bold; border:1px solid #ff4b4b; border-radius:10px; padding:10px;'>Ostatni Impostor: {', '.join(gs['last_impostors'])}</div>",
+                unsafe_allow_html=True)
+
         if user == ADMIN_USER and st.button("🚀 START RUNDY"):
             if start_new_round(): st.rerun()
-
     elif gs['game_state'] == 'PLAYING':
         if user in gs['participants']:
             if user in gs['impostors']:
@@ -315,35 +299,28 @@ elif st.session_state.view == "game_room":
                 st.markdown(
                     f"<div class='role-card player-card'><h3>JESTEŚ GRACZEM 😇</h3><p>HASŁO: <br><span style='font-size: 1.5rem; color: #00d4ff;'>{gs['current_word']}</span></p></div>",
                     unsafe_allow_html=True)
-
         if user == ADMIN_USER:
             c1, c2 = st.columns(2)
             if c1.button("🔔 GŁOSOWANIE"): gs['game_state'] = 'VOTING_AGAIN'; st.rerun()
             if c2.button("🔄 RESTART"):
                 if start_new_round(): st.rerun()
-
     elif gs['game_state'] == 'VOTING_AGAIN':
-        st.subheader("Głosowanie: Gramy dalej?")
+        st.subheader("Głosowanie: Kontynuuj?")
         st.progress(len(gs['votes_again']) / len(gs['participants']))
         c1, c2 = st.columns(2)
-        if c1.button("TAK (Kontynuuj)"): gs['votes_again'][user] = True; st.rerun()
-        if c2.button("NIE (Szukaj Impostora)"): gs['votes_again'][user] = False; st.rerun()
-
-        if user == ADMIN_USER and st.button("PODSUMUJ GŁOSOWANIE"):
+        if c1.button("TAK"): gs['votes_again'][user] = True; st.rerun()
+        if c2.button("NIE"): gs['votes_again'][user] = False; st.rerun()
+        if user == ADMIN_USER and st.button("PODSUMUJ"):
             yes = sum(1 for v in gs['votes_again'].values() if v)
             gs['game_state'] = 'PLAYING' if yes > (len(gs['votes_again']) / 2) else 'VOTING_IMPOSTOR'
             gs['votes_again'] = {};
             st.rerun()
-
     elif gs['game_state'] == 'VOTING_IMPOSTOR':
         st.subheader("Wskaż Impostora!")
         st.progress(len(gs['votes_impostor']) / len(gs['participants']))
         others = [p for p in gs['participants'] if p != user]
         choice = st.selectbox("CEL:", others) if others else None
-        if st.button("ZATWIERDŹ WYBÓR") and choice:
-            gs['votes_impostor'][user] = choice
-            st.success("WYBÓR ZAPISANY")
-
+        if st.button("ZATWIERDŹ") and choice: gs['votes_impostor'][user] = choice; st.success("OK")
         if user == ADMIN_USER and st.button("🏆 PODLICZ WYNIKI"):
             voted = list(gs['votes_impostor'].values())
             for p in gs['cached_players']:
@@ -351,17 +328,14 @@ elif st.session_state.view == "game_room":
                     pts = ((len(gs['participants']) - 1) - voted.count(p['login'])) if p['login'] in gs[
                         'impostors'] else (2 if gs['votes_impostor'].get(p['login']) in gs['impostors'] else 0)
                     p['score'] = int(float(p.get('score', 0))) + pts
+
+            # ZAPISUJEMY KTO BYŁ IMPOSTOREM PRZED RESETEM
+            gs['last_impostors'] = gs['impostors']
             save_data("gracze", pd.DataFrame(gs['cached_players']))
             gs['game_state'] = 'WAITING';
             gs['votes_impostor'] = {};
             st.rerun()
 
-    if user == ADMIN_USER:
-        if st.button("⚙️ PANEL SYSTEMU"):
-            st.session_state.view = "admin_panel"
-            st.rerun()
-    if st.button("WYLOGUJ"):
-        st.session_state.clear()
-        st.rerun()
-
-st.markdown('<div class="footer">© 2026 IMPOSTOR WEB APP v1 by Dawid Czarnota</div>', unsafe_allow_html=True)
+    if user == ADMIN_USER and st.button("⚙️ PANEL SYSTEMU"): st.session_state.view = "admin_panel"; st.rerun()
+    if st.button("WYLOGUJ"): st.session_state.clear(); st.rerun()
+st.markdown('<div class="footer"> © 2026 IMPOSTOR WEB APP v1 by Dawid Czarnota</div>', unsafe_allow_html=True)
